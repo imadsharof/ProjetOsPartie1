@@ -66,21 +66,28 @@ void createPipe(const string& pipePath) {
     }
 }
 
+// Efface tout ce qui est sur la ligne ou est le curseur et remet le curseur au début de la ligne
+void Reset_Ligne(){
+    cout << "\033[2K\r";
+}
+
 // Gestion des signaux SIGINT et SIGPIPE
-void handleSigint(int signal) {
-    (void) signal; // Ignorer l'avertissement pour le paramètre non utilisé
-    if (pipesOuverts) {
-        affichageManuel = true;
-    } else {
-        cout << "Fermeture du programme suite à SIGINT." << endl;
-        exit(4);
+void handleSIGINT(int signal) {
+    if (signal == SIGINT){; // Vérifier que le signal soit bien SIGINT
+        if (pipesOuverts) {
+            affichageManuel = true;
+        } else {
+            cout << endl << "\033[2K\rFermeture du programme suite à SIGINT." << endl;
+            exit(4);
+        }
     }
 }
 
-void handleSigpipe(int signal) {
-    (void) signal; // Ignorer l'avertissement pour le paramètre non utilisé
-    cout << "Connexion terminée." << endl;
-    exit(0);
+void handleSIGPIPE(int signal) {
+    if (signal == SIGPIPE){ // Vérifier que le signal soit bien SIGPIPE
+        cout << "Connexion terminée." << endl;
+        exit(5);
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -95,9 +102,6 @@ int main(int argc, char* argv[]) {
 
     createPipe(sendPipe);
     createPipe(receivePipe);
-
-    signal(SIGINT, handleSigint);
-    signal(SIGPIPE, handleSigpipe);
 
     int shm_fd = -1;
     char* shared_memory = nullptr;
@@ -124,7 +128,9 @@ int main(int argc, char* argv[]) {
             perror("Erreur lors de l'ouverture du pipe de réception");
             exit(1);
         }
+        if(isManuelMode){
         pipesOuverts = true;
+        }
         char buffer[256];
         while (true) {
             ssize_t bytesRead = read(fd_receive, buffer, sizeof(buffer) - 1);
@@ -135,7 +141,10 @@ int main(int argc, char* argv[]) {
                     strncpy(shared_memory, buffer, 4096);
                     sem_post(semaphore);
                 } else {
+                    cout << "\033[2K\r";
                     printf(isBotMode ? "[%s] %s\n" : "[\x1B[4m%s\x1B[0m] %s\n", pseudo_destinataire.c_str(), buffer);
+                    cout << "\033[A";
+                    printf("[%s Entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
                 }
                 fflush(stdout);
             } else {
@@ -146,15 +155,20 @@ int main(int argc, char* argv[]) {
         exit(0);
     } 
     else {
+        signal(SIGINT, handleSIGINT);
+        signal(SIGPIPE, handleSIGPIPE);
+
         int fd_send = open(sendPipe.c_str(), O_WRONLY);
         if (fd_send < 0) {
             perror("Erreur lors de l'ouverture du pipe d'envoi");
             exit(1);
         }
-        pipesOuverts = true;
+        if(isManuelMode){
+            pipesOuverts = true;
+        }
         char buffer[256];
         while (true) {
-            cout << "[" << pseudo_utilisateur << "] Entrez votre message (tapez 'exit' pour quitter) : ";
+            printf("[%s Entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
             if (!fgets(buffer, sizeof(buffer), stdin)) {
                 perror("Erreur lors de la lecture de l'entrée");
                 break;
@@ -165,6 +179,8 @@ int main(int argc, char* argv[]) {
                 perror("Erreur lors de l'écriture dans le pipe");
             }
             if (!isBotMode) {
+                cout << "\033[F"; // Revient une ligne plus haut
+                Reset_Ligne();
                 printf("[\x1B[4m%s\x1B[0m] %s", pseudo_utilisateur.c_str(), buffer);
             }
 
