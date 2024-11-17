@@ -14,6 +14,8 @@
 
 using namespace std;
 
+// g++ -std=gnu++17 -Wall -Wextra -O2 -Wpedantic main.cpp -o chat
+
 bool affichageManuel = false;
 bool pipesOuverts = false;
 
@@ -102,6 +104,15 @@ int main(int argc, char* argv[]) {
 
     createPipe(sendPipe);
     createPipe(receivePipe);
+
+    if (isBotMode){
+        string commande = "./chat-bot.sh " + pseudo_utilisateur + " " + pseudo_destinataire;
+        int resultat = system(commande.c_str());
+        if (resultat != 0) {
+            std::cerr << "Erreur lors de l'exécution du script." << std::endl;
+            exit(6);
+        }
+    }
 
     int shm_fd = -1;
     char* shared_memory = nullptr;
