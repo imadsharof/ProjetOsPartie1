@@ -25,7 +25,7 @@ bool containsChar(const string& str, char ch) {
 }
 
 // Vérifie les paramètres fournis par l'utilisateur
-void checkParams(int argc, char* argv[], string& pseudo_utilisateur, string& pseudo_destinataire, bool& isBotMode, bool& isManuelMode) {
+void checkParams(int argc, char* argv[], string& pseudo_utilisateur, string& pseudo_destinataire, bool& isBotMode, bool& isManuelMode, bool& isJoliMode) {
     if (argc < 3) {
         fprintf(stderr, "chat pseudo_utilisateur pseudo_destinataire [--bot] [--manuel]\n");
         exit(1);
@@ -55,6 +55,7 @@ void checkParams(int argc, char* argv[], string& pseudo_utilisateur, string& pse
     for (int i = 3; i < argc; ++i) {
         if (string(argv[i]) == "--bot") isBotMode = true;
         if (string(argv[i]) == "--manuel") isManuelMode = true;
+        if (string(argv[i]) == "--joli") isJoliMode = true;
     }
 }
 
@@ -79,7 +80,7 @@ void handleSIGINT(int signal) {
         if (pipesOuverts) {
             affichageManuel = true;
         } else {
-            cout << endl << "\033[2K\rFermeture du programme suite à SIGINT." << endl;
+            cout << "\033[2K\rFermeture du programme suite à SIGINT." << endl;
             exit(4);
         }
     }
@@ -96,8 +97,9 @@ int main(int argc, char* argv[]) {
     string pseudo_utilisateur, pseudo_destinataire;
     bool isBotMode = false;
     bool isManuelMode = false;
+    bool isJoliMode = false;
 
-    checkParams(argc, argv, pseudo_utilisateur, pseudo_destinataire, isBotMode, isManuelMode);
+    checkParams(argc, argv, pseudo_utilisateur, pseudo_destinataire, isBotMode, isManuelMode, isJoliMode);
 
     string sendPipe = "/tmp/" + pseudo_utilisateur + "-" + pseudo_destinataire + ".chat";
     string receivePipe = "/tmp/" + pseudo_destinataire + "-" + pseudo_utilisateur + ".chat";
@@ -152,10 +154,13 @@ int main(int argc, char* argv[]) {
                     strncpy(shared_memory, buffer, 4096);
                     sem_post(semaphore);
                 } else {
-                    cout << "\033[2K\r";
-                    printf(isBotMode ? "[%s] %s\n" : "[\x1B[4m%s\x1B[0m] %s\n", pseudo_destinataire.c_str(), buffer);
-                    cout << "\033[A";
-                    printf("[%s Entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
+                    if(isJoliMode){
+                        Reset_Ligne();
+                    }
+                    printf(isBotMode ? "[%s] %s\n" : "[\x1B[4m%s\x1B[0m] %s", pseudo_destinataire.c_str(), buffer);
+                    if(isJoliMode){
+                        printf("[%s, entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
+                    }
                 }
                 fflush(stdout);
             } else {
@@ -179,19 +184,23 @@ int main(int argc, char* argv[]) {
         }
         char buffer[256];
         while (true) {
-            printf("[%s Entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
+            if(isJoliMode){
+                printf("%s, entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
+            }
             if (!fgets(buffer, sizeof(buffer), stdin)) {
                 perror("Erreur lors de la lecture de l'entrée");
                 break;
             }
-            if (string(buffer) == "exit\n") break;
+            if (string(buffer) == "exit\n") exit(0);
 
             if (write(fd_send, buffer, strlen(buffer) + 1) == -1) {
                 perror("Erreur lors de l'écriture dans le pipe");
             }
             if (!isBotMode) {
-                cout << "\033[F"; // Revient une ligne plus haut
-                Reset_Ligne();
+                if(isJoliMode){
+                    cout << "\033[F"; // Revient une ligne plus haut
+                    Reset_Ligne();
+                }
                 printf("[\x1B[4m%s\x1B[0m] %s", pseudo_utilisateur.c_str(), buffer);
             }
 
