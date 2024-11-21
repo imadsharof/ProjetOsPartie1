@@ -25,7 +25,7 @@ bool containsChar(const string& str, char ch) {
 }
 
 // Vérifie les paramètres fournis par l'utilisateur
-void checkParams(int argc, char* argv[], string& pseudo_utilisateur, string& pseudo_destinataire, bool& isBotMode, bool& isManuelMode, bool& isJoliMode) {
+void checkParams(int argc, char* argv[], string& pseudo_utilisateur, string& pseudo_destinataire, bool& isBotMode, bool& isManuelMode, bool& isJoliMode, bool& isTheBot) {
     if (argc < 3) {
         fprintf(stderr, "chat pseudo_utilisateur pseudo_destinataire [--bot] [--manuel]\n");
         exit(1);
@@ -56,6 +56,7 @@ void checkParams(int argc, char* argv[], string& pseudo_utilisateur, string& pse
         if (string(argv[i]) == "--bot") isBotMode = true;
         if (string(argv[i]) == "--manuel") isManuelMode = true;
         if (string(argv[i]) == "--joli") isJoliMode = true;
+        if (string(argv[i]) == "--isTheBot") isTheBot = true;
     }
 }
 
@@ -98,8 +99,9 @@ int main(int argc, char* argv[]) {
     bool isBotMode = false;
     bool isManuelMode = false;
     bool isJoliMode = false;
+    bool isTheBot = false;
 
-    checkParams(argc, argv, pseudo_utilisateur, pseudo_destinataire, isBotMode, isManuelMode, isJoliMode);
+    checkParams(argc, argv, pseudo_utilisateur, pseudo_destinataire, isBotMode, isManuelMode, isJoliMode, isTheBot);
 
     string sendPipe = "/tmp/" + pseudo_utilisateur + "-" + pseudo_destinataire + ".chat";
     string receivePipe = "/tmp/" + pseudo_destinataire + "-" + pseudo_utilisateur + ".chat";
@@ -107,14 +109,6 @@ int main(int argc, char* argv[]) {
     createPipe(sendPipe);
     createPipe(receivePipe);
 
-    if (isBotMode){
-        string commande = "./chat-bot.sh " + pseudo_utilisateur + " " + pseudo_destinataire;
-        int resultat = system(commande.c_str());
-        if (resultat != 0) {
-            std::cerr << "Erreur lors de l'exécution du script." << std::endl;
-            exit(6);
-        }
-    }
 
     int shm_fd = -1;
     char* shared_memory = nullptr;
@@ -157,7 +151,7 @@ int main(int argc, char* argv[]) {
                     if(isJoliMode){
                         Reset_Ligne();
                     }
-                    printf(isBotMode ? "[%s] %s\n" : "[\x1B[4m%s\x1B[0m] %s", pseudo_destinataire.c_str(), buffer);
+                    printf(isBotMode ? "[%s] %s" : "[\x1B[4m%s\x1B[0m] %s", pseudo_destinataire.c_str(), buffer);
                     if(isJoliMode){
                         printf("[%s, entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
                     }
