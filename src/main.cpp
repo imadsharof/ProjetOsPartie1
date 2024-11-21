@@ -136,7 +136,7 @@ int main(int argc, char* argv[]) {
             exit(1);
         }
         if(isManuelMode){
-        pipesOuverts = true;
+            pipesOuverts = true;
         }
         char buffer[256];
         while (true) {

@@ -21,7 +21,7 @@ function reponse(){
     local input=$(echo "$1" | cut -d' ' -f2-)
     case $input in
         "liste")
-            ls >&"${CHAT_PIPES[1]}"
+            echo "$(ls)" >&"${CHAT_PIPES[1]}"
             ;;
         "qui suis-je")
             echo "Vous discutez avec : $pseudo_destinataire" >&"${CHAT_PIPES[1]}"
