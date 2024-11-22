@@ -18,6 +18,7 @@ using namespace std;
 
 bool affichageManuel = false;
 bool pipesOuverts = false;
+bool isManuelMode = false;
 
 // Fonction pour vérifier si une chaîne de caractères contient un caractère spécifique
 bool containsChar(const string& str, char ch) {
@@ -25,7 +26,7 @@ bool containsChar(const string& str, char ch) {
 }
 
 // Vérifie les paramètres fournis par l'utilisateur
-void checkParams(int argc, char* argv[], string& pseudo_utilisateur, string& pseudo_destinataire, bool& isBotMode, bool& isManuelMode, bool& isJoliMode, bool& isTheBot) {
+void checkParams(int argc, char* argv[], string& pseudo_utilisateur, string& pseudo_destinataire, bool& isBotMode, bool& isJoliMode) {
     if (argc < 3) {
         fprintf(stderr, "chat pseudo_utilisateur pseudo_destinataire [--bot] [--manuel]\n");
         exit(1);
@@ -56,7 +57,6 @@ void checkParams(int argc, char* argv[], string& pseudo_utilisateur, string& pse
         if (string(argv[i]) == "--bot") isBotMode = true;
         if (string(argv[i]) == "--manuel") isManuelMode = true;
         if (string(argv[i]) == "--joli") isJoliMode = true;
-        if (string(argv[i]) == "--isTheBot") isTheBot = true;
     }
 }
 
@@ -78,7 +78,7 @@ void Reset_Ligne(){
 // Gestion des signaux SIGINT et SIGPIPE
 void handleSIGINT(int signal) {
     if (signal == SIGINT){; // Vérifier que le signal soit bien SIGINT
-        if (pipesOuverts) {
+        if (pipesOuverts && isManuelMode) {
             affichageManuel = true;
         } else {
             cout << "\033[2K\rFermeture du programme suite à SIGINT." << endl;
@@ -97,11 +97,9 @@ void handleSIGPIPE(int signal) {
 int main(int argc, char* argv[]) {
     string pseudo_utilisateur, pseudo_destinataire;
     bool isBotMode = false;
-    bool isManuelMode = false;
     bool isJoliMode = false;
-    bool isTheBot = false;
 
-    checkParams(argc, argv, pseudo_utilisateur, pseudo_destinataire, isBotMode, isManuelMode, isJoliMode, isTheBot);
+    checkParams(argc, argv, pseudo_utilisateur, pseudo_destinataire, isBotMode, isJoliMode);
 
     string sendPipe = "/tmp/" + pseudo_utilisateur + "-" + pseudo_destinataire + ".chat";
     string receivePipe = "/tmp/" + pseudo_destinataire + "-" + pseudo_utilisateur + ".chat";
@@ -135,9 +133,7 @@ int main(int argc, char* argv[]) {
             perror("Erreur lors de l'ouverture du pipe de réception");
             exit(1);
         }
-        if(isManuelMode){
-            pipesOuverts = true;
-        }
+        pipesOuverts = true;
         char buffer[256];
         while (true) {
             ssize_t bytesRead = read(fd_receive, buffer, sizeof(buffer) - 1);
@@ -173,9 +169,7 @@ int main(int argc, char* argv[]) {
             perror("Erreur lors de l'ouverture du pipe d'envoi");
             exit(1);
         }
-        if(isManuelMode){
-            pipesOuverts = true;
-        }
+        pipesOuverts = true;
         char buffer[256];
         while (true) {
             if(isJoliMode){
