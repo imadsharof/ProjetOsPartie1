@@ -32,7 +32,7 @@ void affichage_manuel();
 // Vérifie si une chaîne de caractères contient un caractère spécifique
 bool containsChar(const string& str, char ch); 
 // Vérifie les paramètres fournis par l'utilisateur
-void checkParams(int argc, char* argv[], bool& isBotMode, bool& isJoliMode);
+void checkParams(int argc, char* argv[], bool& isBotMode);
 // Crée un pipe si celui-ci n'existe pas déjà
 void createPipe(const string& pipePath);
 // Efface tout ce qui est sur la ligne ou est le curseur et remet le curseur au début de la ligne
@@ -145,7 +145,9 @@ int main(int argc, char* argv[]) {
                     texte_a_print = "\033[93m[\x1B[4m%s\x1B[24m]\033[0m %s";
                 }
                 printf(texte_a_print.c_str(), pseudo_utilisateur.c_str(), buffer);
-                affichage_manuel();
+                if (isManuelMode){
+                    affichage_manuel();
+                }
             }
             fflush(stdout);
         }
