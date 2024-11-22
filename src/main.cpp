@@ -16,17 +16,29 @@ using namespace std;
 
 // g++ -std=gnu++17 -Wall -Wextra -O2 -Wpedantic main.cpp -o chat
 
-bool affichageManuel = false;
 bool pipesOuverts = false;
 bool isManuelMode = false;
 
+char* shared_memory = nullptr;
+sem_t* semaphore = nullptr;
+int shm_fd = -1;
+
+string pseudo_utilisateur;
+string pseudo_destinataire;
+
+
+void affichage_manuel(){
+    sem_wait(semaphore);
+    printf("[%s] %s", pseudo_destinataire.c_str(), shared_memory);
+    memset(shared_memory, 0, 4096);
+}
 // Fonction pour vérifier si une chaîne de caractères contient un caractère spécifique
 bool containsChar(const string& str, char ch) {
     return find(str.begin(), str.end(), ch) != str.end();
 }
 
 // Vérifie les paramètres fournis par l'utilisateur
-void checkParams(int argc, char* argv[], string& pseudo_utilisateur, string& pseudo_destinataire, bool& isBotMode, bool& isJoliMode) {
+void checkParams(int argc, char* argv[], bool& isBotMode, bool& isJoliMode) {
     if (argc < 3) {
         fprintf(stderr, "chat pseudo_utilisateur pseudo_destinataire [--bot] [--manuel]\n");
         exit(1);
@@ -78,10 +90,11 @@ void Reset_Ligne(){
 // Gestion des signaux SIGINT et SIGPIPE
 void handleSIGINT(int signal) {
     if (signal == SIGINT){; // Vérifier que le signal soit bien SIGINT
+        Reset_Ligne();
         if (pipesOuverts && isManuelMode) {
-            affichageManuel = true;
+            affichage_manuel();
         } else {
-            cout << "\033[2K\rFermeture du programme suite à SIGINT." << endl;
+            cout << "Fermeture du programme suite à SIGINT." << endl;
             exit(4);
         }
     }
@@ -95,22 +108,16 @@ void handleSIGPIPE(int signal) {
 }
 
 int main(int argc, char* argv[]) {
-    string pseudo_utilisateur, pseudo_destinataire;
     bool isBotMode = false;
     bool isJoliMode = false;
 
-    checkParams(argc, argv, pseudo_utilisateur, pseudo_destinataire, isBotMode, isJoliMode);
+    checkParams(argc, argv, isBotMode, isJoliMode);
 
     string sendPipe = "/tmp/" + pseudo_utilisateur + "-" + pseudo_destinataire + ".chat";
     string receivePipe = "/tmp/" + pseudo_destinataire + "-" + pseudo_utilisateur + ".chat";
 
     createPipe(sendPipe);
     createPipe(receivePipe);
-
-
-    int shm_fd = -1;
-    char* shared_memory = nullptr;
-    sem_t* semaphore = nullptr;
 
     if (isManuelMode) {
         shm_fd = shm_open("/chat_shm", O_CREAT | O_RDWR, 0666);
@@ -143,7 +150,11 @@ int main(int argc, char* argv[]) {
                     cout << '\a';
                     strncpy(shared_memory, buffer, 4096);
                     sem_post(semaphore);
-                } else {
+                    if(strlen(shared_memory) >= 4096){
+                        affichage_manuel();
+                    }
+                } 
+                else {
                     string texte_a_print = "[\x1B[4m%s\x1B[0m] %s";
                     if(isJoliMode){
                         texte_a_print = "\033[96m[\x1B[4m%s\x1B[24m]\033[0m %s";
@@ -195,15 +206,6 @@ int main(int argc, char* argv[]) {
                     texte_a_print = "\033[93m[\x1B[4m%s\x1B[24m]\033[0m %s";
                 }
                 printf(texte_a_print.c_str(), pseudo_utilisateur.c_str(), buffer);
-            }
-
-            if (isManuelMode) {
-                if (affichageManuel || (strlen(shared_memory) >= 4096)) {
-                    affichageManuel = false;
-                    sem_wait(semaphore);
-                    printf("[%s] %s\n", pseudo_destinataire.c_str(), shared_memory);
-                    memset(shared_memory, 0, 4096);
-                }
             }
             fflush(stdout);
         }
