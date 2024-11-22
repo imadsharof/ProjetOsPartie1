@@ -85,8 +85,8 @@ int main(int argc, char* argv[]) {
                 buffer[bytesRead] = '\0';
                 if (isManuelMode) {
                     cout << '\a';
-                    strncpy(shared_memory, buffer, 4096);
-                    sem_post(semaphore);
+                    strncat(shared_memory, buffer, 4096 - strlen(shared_memory)); // Ajouter à la mémoire partagée.
+                    // Signaler que des messages sont disponibles.
                     if(strlen(shared_memory) >= 4096){ // Si la mémoire partagée est au dessus de 4096 octets, affiche les messages
                         affichage_manuel();
                     }
@@ -145,10 +145,12 @@ int main(int argc, char* argv[]) {
                     texte_a_print = "\033[93m[\x1B[4m%s\x1B[24m]\033[0m %s";
                 }
                 printf(texte_a_print.c_str(), pseudo_utilisateur.c_str(), buffer);
+                fflush(stdout); // S'assurer que le message est affiché immédiatement
+			}
                 if (isManuelMode){
                     affichage_manuel();
                 }
-            }
+            
             fflush(stdout);
         }
 
@@ -171,14 +173,18 @@ int main(int argc, char* argv[]) {
     return 0;
 }
 
-void affichage_manuel(){
-    sem_wait(semaphore);
-    string texte_a_print = "[\x1B[4m%s\x1B[0m] %s";
-    if(isJoliMode){
-        texte_a_print = "\033[93m[\x1B[4m%s\x1B[24m]\033[0m %s";
+void affichage_manuel() {
+    while (sem_trywait(semaphore) == 0) { // Tant qu'il y a des messages en attente
+        if (strlen(shared_memory) > 0) { // Si la mémoire partagée contient des messages
+            string texte_a_print = "[\x1B[4m%s\x1B[0m] %s";
+            if (isJoliMode) {
+                texte_a_print = "\033[93m[\x1B[4m%s\x1B[24m]\033[0m %s";
+            }
+            printf(texte_a_print.c_str(), pseudo_destinataire.c_str(), shared_memory);
+            memset(shared_memory, 0, 4096); // Effacer le contenu après affichage
+        }
     }
-    printf(texte_a_print.c_str(), pseudo_destinataire.c_str(), shared_memory);
-    memset(shared_memory, 0, 4096);
+    fflush(stdout);
 }
 
 
@@ -236,17 +242,15 @@ void Reset_Ligne(){
 }
 
 void handleSIGINT(int signal) {
-    if (signal == SIGINT){; // Vérifier que le signal soit bien SIGINT
-        Reset_Ligne();
+    if (signal == SIGINT) {
         if (pipesOuverts && isManuelMode) {
-            affichage_manuel();
+            affichage_manuel(); // Affiche tous les messages en attente
         } else {
             cout << "Fermeture du programme suite à SIGINT." << endl;
-            exit(4);
+            exit(4); // Ferme proprement si les pipes ne sont pas ouverts
         }
     }
 }
-
 void handleSIGPIPE(int signal) {
     if (signal == SIGPIPE){ // Vérifier que le signal soit bien SIGPIPE
         cout << "Connexion terminée par l'autre utilisateur." << endl;
