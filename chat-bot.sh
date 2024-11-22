@@ -24,7 +24,7 @@ function reponse(){
             echo "$(ls)" >&"${CHAT_PIPES[1]}"
             ;;
         "qui suis-je")
-            echo "Vous discutez avec : $pseudo_destinataire" >&"${CHAT_PIPES[1]}"
+            echo "Vous êtes $pseudo_destinataire" >&"${CHAT_PIPES[1]}"
             ;;
         "au revoir")
             echo "Au revoir, $pseudo_destinataire !" >&"${CHAT_PIPES[1]}"
