@@ -144,12 +144,15 @@ int main(int argc, char* argv[]) {
                     strncpy(shared_memory, buffer, 4096);
                     sem_post(semaphore);
                 } else {
+                    string texte_a_print = "[\x1B[4m%s\x1B[0m] %s";
                     if(isJoliMode){
+                        texte_a_print = "\033[96m[\x1B[4m%s\x1B[24m]\033[0m %s";
                         Reset_Ligne();
                     }
-                    printf(isBotMode ? "[%s] %s" : "[\x1B[4m%s\x1B[0m] %s", pseudo_destinataire.c_str(), buffer);
+
+                    printf(isBotMode ? "[%s] %s" : texte_a_print.c_str(), pseudo_destinataire.c_str(), buffer);
                     if(isJoliMode){
-                        printf("[%s, entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
+                        printf("%s, entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
                     }
                 }
                 fflush(stdout);
@@ -185,11 +188,13 @@ int main(int argc, char* argv[]) {
                 perror("Erreur lors de l'écriture dans le pipe");
             }
             if (!isBotMode) {
+                string texte_a_print = "[\x1B[4m%s\x1B[0m] %s";
                 if(isJoliMode){
                     cout << "\033[F"; // Revient une ligne plus haut
                     Reset_Ligne();
+                    texte_a_print = "\033[93m[\x1B[4m%s\x1B[24m]\033[0m %s";
                 }
-                printf("[\x1B[4m%s\x1B[0m] %s", pseudo_utilisateur.c_str(), buffer);
+                printf(texte_a_print.c_str(), pseudo_utilisateur.c_str(), buffer);
             }
 
             if (isManuelMode) {
