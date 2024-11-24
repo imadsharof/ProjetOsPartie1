@@ -1,4 +1,9 @@
-#!/usr/bin/env bash
+#!/bin/bash
+
+if [[ $# -ne 1 && $# -ne 2 ]]; then
+    echo "chat-bot destinataire [pseudo]" >&2 
+    exit 1 
+fi
 
 pseudo_destinataire=$1
 pseudo_utilisateur=${2:-bot}

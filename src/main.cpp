@@ -114,7 +114,9 @@ int main(int argc, char* argv[]) {
             if (write(fd_send, buffer, strlen(buffer) + 1) == -1) {
                 perror("Erreur lors de l'écriture dans le pipe");
             }
-            printf("[%s] %s", pseudo_utilisateur.c_str(), buffer);
+            if(!isBotMode){
+                printf("[%s] %s", pseudo_utilisateur.c_str(), buffer);
+            }
             if (isManuelMode) {
                 affichage_manuel();
             }
@@ -132,7 +134,6 @@ int main(int argc, char* argv[]) {
         release_shared_memory();
     }
 
-    cout << "Session terminée. Au revoir, " << pseudo_utilisateur << "!" << endl;
     return 0;
 }
 
@@ -209,7 +210,7 @@ void output_shared_memory() {
     size_t offset = 0;
     char* shm_data = shm_ptr + sizeof(size_t);
     while (offset < *shm_offset_ptr) {
-        cout << "- " << (shm_data + offset) << endl;
+        cout << "[" << pseudo_destinataire << "] " << (shm_data + offset);
         offset += strlen(shm_data + offset) + 1;
     }
 
@@ -260,7 +261,7 @@ void checkParams(int argc, char* argv[], bool& isBotMode) {
 }
 
 void createPipe(const string& pipePath) {
-    if (access(pipePath.c_str(), F_OK) == -1) {
+    if (access(pipePath.c_str(), F_OK) != 0) {
         if (mkfifo(pipePath.c_str(), 0666) == -1) {
             perror("Erreur lors de la création du pipe");
             exit(1);
@@ -273,6 +274,7 @@ void Reset_Ligne() {
 }
 
 void handleSIGINT(int signal) {
+    Reset_Ligne();
     if (signal == SIGINT) {
         if (pipesOuverts && isManuelMode) {
             affichage_manuel();
@@ -284,7 +286,7 @@ void handleSIGINT(int signal) {
 }
 
 void handleSIGPIPE(int signal) {
-    if (signal == SIGPIPE) {
+    if (signal == SIGPIPE && !isManuelMode) {
         cout << "Connexion terminée par l'autre utilisateur." << endl;
         exit(5);
     }
