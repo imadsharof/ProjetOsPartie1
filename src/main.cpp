@@ -13,17 +13,29 @@
 
 using namespace std;
 
+// Constantes
+constexpr size_t SHM_SIZE = 4096;
+const char* SHM_NAME = "/chat_shm";
+const char* SEM_NAME = "/chat_semaphore";
+
+//Booléens
 bool pipesOuverts = false;
 bool isManuelMode = false;
 bool isJoliMode = false;
 
-char* shared_memory = nullptr;
+// Variables globales
+char* shm_ptr = nullptr;
 sem_t* semaphore = nullptr;
-int shm_fd = -1;
+size_t* shm_offset_ptr = nullptr;
 
 string pseudo_utilisateur;
 string pseudo_destinataire;
 
+//Prototypes
+void initialize_shared_memory();
+void release_shared_memory();
+void output_shared_memory();
+void write_to_shared_memory(const string& message);
 void affichage_manuel(); 
 bool containsChar(const string& str, char ch); 
 void checkParams(int argc, char* argv[], bool& isBotMode);
@@ -31,6 +43,7 @@ void createPipe(const string& pipePath);
 void Reset_Ligne();
 void handleSIGINT(int signal);
 void handleSIGPIPE(int signal);
+
 
 int main(int argc, char* argv[]) {
     bool isBotMode = false;
@@ -44,27 +57,7 @@ int main(int argc, char* argv[]) {
     createPipe(receivePipe);
 
     if (isManuelMode) {
-        shm_fd = shm_open("/chat_shm", O_CREAT | O_RDWR, 0666);
-        if (shm_fd == -1) {
-            perror("Erreur lors de la configuration de la mémoire partagée");
-            exit(1);
-        }
-        if (ftruncate(shm_fd, 4096) == -1) {
-            perror("Erreur lors de la configuration de la taille de la mémoire partagée");
-            exit(1);
-        }
-        shared_memory = (char*)mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-        if (shared_memory == MAP_FAILED) {
-            perror("Erreur lors du mapping de la mémoire partagée");
-            exit(1);
-        }
-        memset(shared_memory, 0, 4096);
-
-        semaphore = sem_open("/chat_sem", O_CREAT, 0666, 0);
-        if (semaphore == SEM_FAILED) {
-            perror("Erreur lors de l'ouverture du sémaphore");
-            exit(1);
-        }
+        initialize_shared_memory();
     }
 
     pid_t pid = fork(); 
@@ -85,13 +78,7 @@ int main(int argc, char* argv[]) {
             if (bytesRead > 0) {
                 buffer[bytesRead] = '\0';
                 if (isManuelMode) {
-                    cout << '\a';
-                    if (strlen(shared_memory) + bytesRead < 4096) {
-                        strcat(shared_memory, buffer); 
-                        sem_post(semaphore); 
-                    } else {
-                        cerr << "Mémoire partagée saturée, message ignoré." << endl;
-                    }
+                    write_to_shared_memory(buffer); 
                 } else {
                     printf("[%s] %s", pseudo_destinataire.c_str(), buffer);
                 }
@@ -142,25 +129,96 @@ int main(int argc, char* argv[]) {
     unlink(receivePipe.c_str());
 
     if (isManuelMode) {
-        munmap(shared_memory, 4096);
-        close(shm_fd);
-        shm_unlink("/chat_shm");
-        sem_close(semaphore);
-        sem_unlink("/chat_sem");
+        release_shared_memory();
     }
 
     cout << "Session terminée. Au revoir, " << pseudo_utilisateur << "!" << endl;
     return 0;
 }
 
-void affichage_manuel() {
-    while (sem_trywait(semaphore) == 0) {
-        if (strlen(shared_memory) > 0) {
-            printf("[%s] %s", pseudo_destinataire.c_str(), shared_memory);
-            memset(shared_memory, 0, 4096); 
-        }
+// Initialisation de la mémoire partagée
+void initialize_shared_memory() {
+    int shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
+    if (shm_fd == -1) {
+        perror("Erreur lors de l'ouverture de la mémoire partagée");
+        exit(1);
     }
-    fflush(stdout);
+
+    if (ftruncate(shm_fd, SHM_SIZE) == -1) {
+        perror("Erreur lors de la configuration de la taille de la mémoire partagée");
+        close(shm_fd);
+        shm_unlink(SHM_NAME);
+        exit(1);
+    }
+
+    shm_ptr = static_cast<char*>(mmap(nullptr, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0));
+    if (shm_ptr == MAP_FAILED) {
+        perror("Erreur lors du mapping de la mémoire partagée");
+        close(shm_fd);
+        shm_unlink(SHM_NAME);
+        exit(1);
+    }
+
+    shm_offset_ptr = reinterpret_cast<size_t*>(shm_ptr);
+    *shm_offset_ptr = 0;
+
+    semaphore = sem_open(SEM_NAME, O_CREAT, 0666, 1);
+    if (semaphore == SEM_FAILED) {
+        perror("Erreur lors de l'ouverture du sémaphore");
+        munmap(shm_ptr, SHM_SIZE);
+        shm_unlink(SHM_NAME);
+        exit(1);
+    }
+
+    close(shm_fd);
+}
+
+// Libération de la mémoire partagée
+void release_shared_memory() {
+    if (shm_ptr) {
+        munmap(shm_ptr, SHM_SIZE);
+        shm_unlink(SHM_NAME);
+    }
+    if (semaphore) {
+        sem_close(semaphore);
+        sem_unlink(SEM_NAME);
+    }
+}
+
+// Écriture dans la mémoire partagée
+void write_to_shared_memory(const string& message) {
+    sem_wait(semaphore);
+
+    size_t message_length = message.size() + 1;
+    if (*shm_offset_ptr + message_length > SHM_SIZE) {
+        cerr << "Mémoire partagée pleine. Vidage..." << endl;
+        *shm_offset_ptr = 0;
+    }
+
+    char* shm_data = shm_ptr + sizeof(size_t) + *shm_offset_ptr;
+    memcpy(shm_data, message.c_str(), message_length);
+    *shm_offset_ptr += message_length;
+
+    sem_post(semaphore);
+}
+
+// Lecture depuis la mémoire partagée
+void output_shared_memory() {
+    sem_wait(semaphore);
+
+    size_t offset = 0;
+    char* shm_data = shm_ptr + sizeof(size_t);
+    while (offset < *shm_offset_ptr) {
+        cout << "- " << (shm_data + offset) << endl;
+        offset += strlen(shm_data + offset) + 1;
+    }
+
+    sem_post(semaphore);
+}
+
+
+void affichage_manuel() {
+    output_shared_memory();
 }
 
 bool containsChar(const string& str, char ch) {
