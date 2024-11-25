@@ -110,8 +110,8 @@ int main(int argc, char* argv[]) {
                 break;
             }
             if (string(buffer) == "exit\n") exit(0);
-
-            if (write(fd_send, buffer, strlen(buffer) + 1) == -1) {
+            ssize_t bytes_written = write(fd_send, buffer, strlen(buffer) + 1);
+            if (bytes_written == -1) {
                 perror("Erreur lors de l'écriture dans le pipe");
             }
             if(!isBotMode){
@@ -214,6 +214,7 @@ void output_shared_memory() {
         offset += strlen(shm_data + offset) + 1;
     }
 
+    memset(shm_ptr, 0, SHM_SIZE);
     sem_post(semaphore);
 }
 

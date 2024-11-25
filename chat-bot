@@ -5,11 +5,11 @@ if [[ $# -ne 1 && $# -ne 2 ]]; then
     exit 1 
 fi
 
-pseudo_destinataire=$1
-pseudo_utilisateur=${2:-bot}
+pseudo_destinataire="$1"
+pseudo_utilisateur="${2:-bot}"
 liste_bot="liste-bot.txt"
 
-coproc CHAT_PIPES { ./chat "$pseudo_utilisateur" "$pseudo_destinataire" --bot; } 
+coproc CHAT_PIPES { ./chat $pseudo_utilisateur $pseudo_destinataire --bot; } 
 
 function reponse_liste_bot(){
     local command="$1" 
@@ -18,7 +18,7 @@ function reponse_liste_bot(){
     if [ -n "$response" ]; then
         echo "$response" >&"${CHAT_PIPES[1]}"
     else
-        echo "Commande non reconnue." >&"${CHAT_PIPES[1]}"
+        echo "🤖 ?" >&"${CHAT_PIPES[1]}"
     fi
 }
 
@@ -29,10 +29,9 @@ function reponse(){
             echo "$(ls)" >&"${CHAT_PIPES[1]}"
             ;;
         "qui suis-je")
-            echo "Vous êtes $pseudo_destinataire" >&"${CHAT_PIPES[1]}"
+            echo "$pseudo_destinataire" >&"${CHAT_PIPES[1]}"
             ;;
         "au revoir")
-            echo "Au revoir, $pseudo_destinataire !" >&"${CHAT_PIPES[1]}"
             exit 0
             ;;
         li\ *)
