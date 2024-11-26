@@ -275,7 +275,6 @@ void Reset_Ligne() {
 }
 
 void handleSIGINT(int signal) {
-    Reset_Ligne();
     if (signal == SIGINT) {
         if (pipesOuverts && isManuelMode) {
             affichage_manuel();

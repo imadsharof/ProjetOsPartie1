@@ -35,9 +35,10 @@ function reponse(){
             exit 0
             ;;
         li\ *)
-            local file=$(echo "$command" | cut -d' ' -f2-)
+            local file=$(echo "$input" | cut -d' ' -f2-)
             if [ -f "$file" ]; then
-                cat "$file\n" >&"${CHAT_PIPES[1]}"
+                cat "$file" >&"${CHAT_PIPES[1]}"
+                echo >&"${CHAT_PIPES[1]}"
             else
                 echo "Erreur : fichier '$file' introuvable." >&"${CHAT_PIPES[1]}"
             fi
