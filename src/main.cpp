@@ -32,16 +32,25 @@ string pseudo_utilisateur;
 string pseudo_destinataire;
 
 //Prototypes
+// Initialise la mémoire partagée
 void initialize_shared_memory();
+// Libère la mémoire partagée à la fin du code
 void release_shared_memory();
+// Print ce qu'il y a dans la mémoire partagée et la réinitialise
 void output_shared_memory();
+// Ecrit dans la mémoire partagée
 void write_to_shared_memory(const string& message);
-void affichage_manuel(); 
+// Vérifie si un caractère spécirique est dans la chaine de caractères
 bool containsChar(const string& str, char ch); 
+// Check les paramètres
 void checkParams(int argc, char* argv[], bool& isBotMode);
+// Crée les pipes
 void createPipe(const string& pipePath);
+// Supprime la ligne et remet le curseur au début de la ligne
 void Reset_Ligne();
+// S'occupe du signal SIGINT
 void handleSIGINT(int signal);
+// S'occupe du signal SIGPIPE
 void handleSIGPIPE(int signal);
 
 
@@ -60,12 +69,14 @@ int main(int argc, char* argv[]) {
         initialize_shared_memory();
     }
 
+    // Crée les processus
     pid_t pid = fork(); 
     if (pid < 0) {
         perror("Erreur lors de la création du processus");
         exit(1);
     } 
     else if (pid == 0) {
+        // Processus fils, reçoit les messages
         int fd_receive = open(receivePipe.c_str(), O_RDONLY);
         if (fd_receive < 0) {
             perror("Erreur lors de l'ouverture du pipe de réception");
@@ -78,7 +89,7 @@ int main(int argc, char* argv[]) {
             if (bytesRead > 0) {
                 buffer[bytesRead] = '\0';
                 if (isManuelMode) {
-                    write_to_shared_memory(buffer); 
+                    write_to_shared_memory(string(buffer)); 
                 } else {
                     printf("[%s] %s", pseudo_destinataire.c_str(), buffer);
                 }
@@ -91,6 +102,7 @@ int main(int argc, char* argv[]) {
         exit(0);
     } 
     else {
+        // Processus père, envoie les messages
         signal(SIGINT, handleSIGINT);
         signal(SIGPIPE, handleSIGPIPE);
 
@@ -118,7 +130,7 @@ int main(int argc, char* argv[]) {
                 printf("[%s] %s", pseudo_utilisateur.c_str(), buffer);
             }
             if (isManuelMode) {
-                affichage_manuel();
+                output_shared_memory();
             }
             fflush(stdout);
         }
@@ -218,11 +230,6 @@ void output_shared_memory() {
     sem_post(semaphore);
 }
 
-
-void affichage_manuel() {
-    output_shared_memory();
-}
-
 bool containsChar(const string& str, char ch) {
     return find(str.begin(), str.end(), ch) != str.end();
 }
@@ -277,7 +284,7 @@ void Reset_Ligne() {
 void handleSIGINT(int signal) {
     if (signal == SIGINT) {
         if (pipesOuverts && isManuelMode) {
-            affichage_manuel();
+            output_shared_memory();
         } else {
             cout << "Fermeture du programme suite à SIGINT." << endl;
             exit(4);
