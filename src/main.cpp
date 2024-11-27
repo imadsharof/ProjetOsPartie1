@@ -9,6 +9,7 @@
 #include <sys/wait.h>
 #include <csignal>
 #include <sys/mman.h>
+#include <errno.h>
 
 using namespace std;
 
@@ -22,8 +23,8 @@ bool isJoliMode = false;
 bool isBotMode = false;
 
 // Pipes
-int fd_receive;
-int fd_send;
+int fd_receive = -1;
+int fd_send = -1;
 string sendPipe;
 string receivePipe;
 
@@ -34,6 +35,12 @@ size_t* shm_offset_ptr = nullptr;
 string pseudo_utilisateur;
 string pseudo_destinataire;
 string SHM_NAME;
+
+// Variables pour les signaux
+volatile sig_atomic_t should_exit = 0;
+
+// Déclaration de 'pid' en variable globale
+pid_t pid;
 
 // Prototypes
 void initialize_shared_memory(bool create, const char* shm_name);
@@ -48,6 +55,7 @@ string texte_a_print(string pseudo);
 void handleSIGINT(int signal);
 void handleSIGPIPE(int signal);
 void handleSIGUSR1(int signal);
+void handleSIGTERM(int signal);
 
 int main(int argc, char* argv[]) {
     checkParams(argc, argv);
@@ -61,16 +69,31 @@ int main(int argc, char* argv[]) {
     createPipe(sendPipe);
     createPipe(receivePipe);
 
-    pid_t pid = fork();
+    // Initialiser la mémoire partagée avant le fork pour éviter les problèmes
+    if (isManuelMode) {
+        initialize_shared_memory(true, SHM_NAME.c_str()); // Crée la mémoire partagée
+    }
+
+    pid = fork();
     if (pid < 0) {
         perror("Erreur lors de la création du processus");
+        if (isManuelMode) {
+            release_shared_memory(true, SHM_NAME.c_str());
+        }
         exit(1);
     } else if (pid == 0) {
         // Processus enfant
         if (isManuelMode) {
             initialize_shared_memory(false, SHM_NAME.c_str()); // Ouvre la mémoire partagée existante
         }
-        signal(SIGINT, SIG_IGN);
+        signal(SIGINT, SIG_IGN); // Ignorer SIGINT dans le processus enfant
+
+        // Handler pour SIGTERM
+        signal(SIGTERM, handleSIGTERM);
+
+        // Handler pour SIGUSR1
+        signal(SIGUSR1, handleSIGUSR1);
+
         fd_receive = open(receivePipe.c_str(), O_RDONLY);
         if (fd_receive < 0) {
             perror("Erreur lors de l'ouverture du pipe de réception");
@@ -105,8 +128,17 @@ int main(int argc, char* argv[]) {
                 break;
             } else {
                 // Erreur de lecture
-                perror("Erreur lors de la lecture du pipe de réception");
-                break;
+                if (errno == EINTR) {
+                    if (should_exit) {
+                        // Le parent a demandé la terminaison
+                        break;
+                    } else {
+                        continue; // Continuer la lecture
+                    }
+                } else {
+                    perror("Erreur lors de la lecture du pipe de réception");
+                    break;
+                }
             }
         }
         close(fd_receive);
@@ -116,9 +148,6 @@ int main(int argc, char* argv[]) {
         exit(0);
     } else {
         // Processus parent
-        if (isManuelMode) {
-            initialize_shared_memory(true, SHM_NAME.c_str()); // Crée la mémoire partagée
-        }
         signal(SIGINT, handleSIGINT);
         signal(SIGPIPE, handleSIGPIPE);
         signal(SIGUSR1, handleSIGUSR1);
@@ -126,6 +155,11 @@ int main(int argc, char* argv[]) {
         fd_send = open(sendPipe.c_str(), O_WRONLY);
         if (fd_send < 0) {
             perror("Erreur lors de l'ouverture du pipe d'envoi");
+            // Envoyer SIGTERM au processus enfant pour qu'il se termine
+            kill(pid, SIGTERM);
+            if (isManuelMode) {
+                release_shared_memory(true, SHM_NAME.c_str());
+            }
             exit(1);
         }
         pipesOuverts = true;
@@ -136,10 +170,17 @@ int main(int argc, char* argv[]) {
                 fflush(stdout);
             }
             if (!fgets(buffer, sizeof(buffer), stdin)) {
-                // Fin de stdin
+                // Fin de stdin (Ctrl+D)
+                if (isManuelMode) {
+                    output_shared_memory(); // Afficher les messages en attente
+                }
+                // Envoyer SIGTERM au processus enfant pour qu'il se termine
+                kill(pid, SIGTERM);
                 break;
             }
             if (strcmp(buffer, "exit\n") == 0) {
+                // Envoyer SIGTERM au processus enfant pour qu'il se termine
+                kill(pid, SIGTERM);
                 break;
             }
             ssize_t bytes_written = write(fd_send, buffer, strlen(buffer) + 1);
@@ -157,6 +198,8 @@ int main(int argc, char* argv[]) {
         }
 
         close(fd_send);
+
+        // Attendre la fin du processus enfant
         wait(nullptr);
 
         unlink(sendPipe.c_str());
@@ -168,6 +211,106 @@ int main(int argc, char* argv[]) {
 
         return 0;
     }
+}
+
+// Handler pour SIGTERM dans le processus enfant
+void handleSIGTERM(int /*signal*/) {
+    should_exit = 1;
+}
+
+// Handler pour SIGINT dans le processus parent
+void handleSIGINT(int signal) {
+    if (signal == SIGINT) {
+        if (!pipesOuverts) {
+            // Les pipes n'ont pas été ouverts, terminer avec le code de retour 4
+            exit(4);
+        } else if (isManuelMode) {
+            output_shared_memory();
+        } else {
+            // Ignorer SIGINT lorsque les pipes sont ouverts et que --manuel n'est pas activé
+        }
+    }
+}
+
+void handleSIGPIPE(int signal) {
+    if (signal == SIGPIPE && !isManuelMode) {
+        cout << "Connexion terminée par l'autre utilisateur." << endl;
+        exit(5);
+    }
+}
+
+void handleSIGUSR1(int) {
+    if (isManuelMode) {
+        output_shared_memory();
+    }
+}
+
+// Les autres fonctions (checkParams, createPipe, etc.) restent inchangées
+
+bool containsChar(const string& str, char ch) {
+    return find(str.begin(), str.end(), ch) != str.end();
+}
+
+void checkParams(int argc, char* argv[]) {
+    if (argc < 3) {
+        fprintf(stderr, "chat pseudo_utilisateur pseudo_destinataire [--bot] [--manuel]\n");
+        exit(1);
+    }
+
+    pseudo_utilisateur = argv[1];
+    pseudo_destinataire = argv[2];
+
+    if (pseudo_utilisateur.size() > 30 || pseudo_destinataire.size() > 30) {
+        fprintf(stderr, "Erreur : Les pseudonymes ne doivent pas dépasser 30 caractères.\n");
+        exit(2);
+    }
+
+    if (pseudo_utilisateur == "." || pseudo_utilisateur == ".." || pseudo_destinataire == "." || pseudo_destinataire == "..") {
+        fprintf(stderr, "Erreur : Les pseudonymes ne peuvent pas être '.' ou '..'.\n");
+        exit(3);
+    }
+
+    vector<char> caracteres_interdits = {'/', '[', ']', '-'};
+    for (char caractere : caracteres_interdits) {
+        if (containsChar(pseudo_utilisateur, caractere) || containsChar(pseudo_destinataire, caractere)) {
+            fprintf(stderr, "Erreur : Les pseudonymes contiennent des caractères interdits (/, -, [, ]).\n");
+            exit(3);
+        }
+    }
+
+    for (int i = 3; i < argc; ++i) {
+        if (string(argv[i]) == "--bot") isBotMode = true;
+        if (string(argv[i]) == "--manuel") isManuelMode = true;
+        if (string(argv[i]) == "--joli") isJoliMode = true;
+    }
+}
+
+void createPipe(const string& pipePath) {
+    if (access(pipePath.c_str(), F_OK) != 0) {
+        if (mkfifo(pipePath.c_str(), 0666) == -1) {
+            perror("Erreur lors de la création du pipe");
+            exit(1);
+        }
+    }
+}
+
+void Reset_Ligne() {
+    cout << "\033[2K\r";
+}
+
+string texte_a_print(string pseudo) {
+    string texte = "[\x1B[4m%s\x1B[0m] %s";
+    if (isJoliMode) {
+        if (pseudo == pseudo_destinataire) {
+            texte = "\033[93m[\x1B[4m%s\x1B[24m]\033[0m %s";
+            Reset_Ligne();
+        } else if (pseudo == pseudo_utilisateur) {
+            texte = "\033[96m[\x1B[4m%s\x1B[24m]\033[0m %s";
+            printf("\033[A");
+            Reset_Ligne();
+        }
+    }
+    return texte;
 }
 
 void initialize_shared_memory(bool create, const char* shm_name) {
@@ -243,107 +386,3 @@ void output_shared_memory() {
     memset(shm_ptr + sizeof(size_t), 0, SHM_SIZE - sizeof(size_t));
     *shm_offset_ptr = 0;
 }
-
-void handleSIGINT(int signal) {
-    if (isJoliMode) {
-        Reset_Ligne();
-    }
-    if (signal == SIGINT) {
-        if (pipesOuverts && isManuelMode) {
-            output_shared_memory();
-        } else {
-            cout << "Fermeture du programme suite à SIGINT." << endl;
-            if (fd_receive > 0) close(fd_receive);
-            if (fd_send > 0) close(fd_send);
-
-            unlink(sendPipe.c_str());
-            unlink(receivePipe.c_str());
-
-            exit(4);
-        }
-    }
-}
-
-void handleSIGPIPE(int signal) {
-    if (signal == SIGPIPE && !isManuelMode) {
-        cout << "Connexion terminée par l'autre utilisateur." << endl;
-        exit(5);
-    }
-}
-
-void handleSIGUSR1(int ) {
-    if (isManuelMode) {
-        output_shared_memory();
-    }
-}
-
-// Les autres fonctions (checkParams, createPipe, etc.) restent inchangées
-
-
-bool containsChar(const string& str, char ch) {
-    return find(str.begin(), str.end(), ch) != str.end();
-}
-
-void checkParams(int argc, char* argv[]) {
-    if (argc < 3) {
-        fprintf(stderr, "chat pseudo_utilisateur pseudo_destinataire [--bot] [--manuel]\n");
-        exit(1);
-    }
-
-    pseudo_utilisateur = argv[1];
-    pseudo_destinataire = argv[2];
-
-    if (pseudo_utilisateur.size() > 30 || pseudo_destinataire.size() > 30) {
-        fprintf(stderr, "Erreur : Les pseudonymes ne doivent pas dépasser 30 caractères.\n");
-        exit(2);
-    }
-
-    if (pseudo_utilisateur == "." || pseudo_utilisateur == ".." || pseudo_destinataire == "." || pseudo_destinataire == "..") {
-        fprintf(stderr, "Erreur : Les pseudonymes ne peuvent pas être '.' ou '..'.\n");
-        exit(3);
-    }
-
-    vector<char> caracteres_interdits = {'/', '[', ']', '-'};
-    for (char caractere : caracteres_interdits) {
-        if (containsChar(pseudo_utilisateur, caractere) || containsChar(pseudo_destinataire, caractere)) {
-            fprintf(stderr, "Erreur : Les pseudonymes contiennent des caractères interdits (/, -, [, ]).\n");
-            exit(3);
-        }
-    }
-
-    for (int i = 3; i < argc; ++i) {
-        if (string(argv[i]) == "--bot") isBotMode = true;
-        if (string(argv[i]) == "--manuel") isManuelMode = true;
-        if (string(argv[i]) == "--joli") isJoliMode = true;
-    }
-}
-
-void createPipe(const string& pipePath) {
-    if (access(pipePath.c_str(), F_OK) != 0) {
-        if (mkfifo(pipePath.c_str(), 0666) == -1) {
-            perror("Erreur lors de la création du pipe");
-            exit(1);
-        }
-    }
-}
-
-void Reset_Ligne() {
-    cout << "\033[2K\r";
-}
-
-string texte_a_print(string pseudo) {
-    string texte = "[\x1B[4m%s\x1B[0m] %s";
-    if (isJoliMode) {
-        if (pseudo == pseudo_destinataire) {
-            texte = "\033[93m[\x1B[4m%s\x1B[24m]\033[0m %s";
-            Reset_Ligne();
-        } else if (pseudo == pseudo_utilisateur) {
-            texte = "\033[96m[\x1B[4m%s\x1B[24m]\033[0m %s";
-            printf("\033[A");
-            Reset_Ligne();
-        }
-    }
-    return texte;
-}
-
-
