@@ -24,6 +24,12 @@ bool isManuelMode = false;
 bool isJoliMode = false;
 bool isBotMode = false;
 
+// Pipes
+int fd_receive;
+int fd_send;
+string sendPipe;
+string receivePipe;
+
 // Variables globales
 char* shm_ptr = nullptr;
 sem_t* semaphore = nullptr;
@@ -71,8 +77,8 @@ int main(int argc, char* argv[]) {
 
     checkParams(argc, argv);
 
-    string sendPipe = "/tmp/" + pseudo_utilisateur + "-" + pseudo_destinataire + ".chat";
-    string receivePipe = "/tmp/" + pseudo_destinataire + "-" + pseudo_utilisateur + ".chat";
+    sendPipe = "/tmp/" + pseudo_utilisateur + "-" + pseudo_destinataire + ".chat";
+    receivePipe = "/tmp/" + pseudo_destinataire + "-" + pseudo_utilisateur + ".chat";
 
     createPipe(sendPipe);
     createPipe(receivePipe);
@@ -331,6 +337,12 @@ void handleSIGINT(int signal) {
             output_shared_memory();
         } else {
             cout << "Fermeture du programme suite à SIGINT." << endl;
+            close(fd_receive);
+            close(fd_send);
+
+            unlink(sendPipe.c_str());
+            unlink(receivePipe.c_str());
+            
             exit(4);
         }
     }
