@@ -50,6 +50,7 @@ void handleSIGINT(int signal);
 void handleSIGPIPE(int signal);
 void handleSIGUSR1(int signal);
 void handleSIGTERM(int signal);
+void handleSIGUSR2(int signal );
 
 int main(int argc, char* argv[]) {
     checkParams(argc, argv); // Vérifie les paramètres du programme
@@ -119,7 +120,12 @@ int main(int argc, char* argv[]) {
                 }
             } else if (bytesRead == 0) {
                 // Pipe fermé, l'autre utilisateur a quitté
-                break;
+				if (!isManuelMode) {
+				// Informer le processus parent en mode normal
+				kill(getppid(), SIGUSR2);
+				}
+				break;
+               
             } else {
                 // Erreur de lecture
                 if (errno == EINTR) {
@@ -141,6 +147,7 @@ int main(int argc, char* argv[]) {
         signal(SIGINT, handleSIGINT);     // Gestionnaire pour SIGINT
         signal(SIGPIPE, handleSIGPIPE);   // Gestionnaire pour SIGPIPE
         signal(SIGUSR1, handleSIGUSR1);   // Gestionnaire pour SIGUSR1
+        signal(SIGUSR2, handleSIGUSR2);   // Ajout du gestionnaire SIGUSR2
 
         // Ouverture du pipe d'envoi
         fd_send = open(sendPipe.c_str(), O_WRONLY);
@@ -210,6 +217,30 @@ int main(int argc, char* argv[]) {
     }
 }
 
+void handleSIGUSR2(int signal) {
+    if (signal == SIGUSR2) {
+        // L'autre utilisateur s'est déconnecté
+        if (!isManuelMode) {
+            // En mode normal, terminer le programme proprement
+            if (fd_send != -1) close(fd_send);
+            if (pid > 0) {
+                kill(pid, SIGTERM);
+                wait(nullptr);
+            }
+            unlink(sendPipe.c_str());
+            unlink(receivePipe.c_str());
+            if (isManuelMode) {
+                release_shared_memory(true, SHM_NAME.c_str());
+            }
+            exit(0);
+        } else {
+            // En mode manuel, ne pas terminer le programme
+            
+        }
+    }
+}
+
+
 // === Gestionnaires de signaux ===
 
 // Gestionnaire pour SIGTERM dans le processus enfant
@@ -226,7 +257,20 @@ void handleSIGINT(int signal) {
         } else if (isManuelMode) {
             output_shared_memory(); // Afficher les messages en attente
         } else {
-            // Ignorer SIGINT lorsque les pipes sont ouverts et que --manuel n'est pas activé
+            // Terminer le programme proprement avec un message
+            fprintf(stderr, "\n\033[33mWARNING\033[0m Utilisateur déconnecté.\n");
+            // Fermer les descripteurs de fichiers et envoyer un signal au processus enfant
+            if (fd_send != -1) close(fd_send);
+            kill(pid, SIGTERM); // Envoyer SIGTERM au processus enfant
+            // Attendre la fin du processus enfant
+            wait(nullptr);
+            // Suppression des pipes nommés
+            unlink(sendPipe.c_str());
+            unlink(receivePipe.c_str());
+            if (isManuelMode) {
+                release_shared_memory(true, SHM_NAME.c_str()); // Libération de la mémoire partagée
+            }
+            exit(0);
         }
     }
 }
