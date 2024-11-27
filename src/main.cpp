@@ -19,7 +19,6 @@ constexpr size_t SHM_SIZE = 4096; // Taille de la mémoire partagée
 // Variables globales
 bool pipesOuverts = false;       // Indique si les pipes ont été ouverts
 bool isManuelMode = false;       // Mode manuel activé ou non
-bool isJoliMode = false;         // Mode joli activé ou non
 bool isBotMode = false;          // Mode bot activé ou non
 
 int fd_receive = -1;             // Descripteur du pipe de réception
@@ -46,7 +45,6 @@ void write_to_shared_memory(const string& message);
 bool containsChar(const string& str, char ch);
 void checkParams(int argc, char* argv[]);
 void createPipe(const string& pipePath);
-void Reset_Ligne();
 string texte_a_print(string pseudo);
 void handleSIGINT(int signal);
 void handleSIGPIPE(int signal);
@@ -99,7 +97,7 @@ int main(int argc, char* argv[]) {
         pipesOuverts = true;
 
         char buffer[256]; // Buffer pour la lecture des messages
-        while (true) {
+        while (!should_exit) {
             ssize_t bytesRead = read(fd_receive, buffer, sizeof(buffer) - 1);
             if (bytesRead > 0) {
                 buffer[bytesRead] = '\0'; // Ajout du terminateur de chaîne
@@ -117,9 +115,6 @@ int main(int argc, char* argv[]) {
                     // Affichage immédiat du message en mode normal
                     printf(isBotMode ? "[%s] %s" : texte_a_print(pseudo_destinataire).c_str(),
                            pseudo_destinataire.c_str(), buffer);
-                    if (isJoliMode) {
-                        printf("%s, entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
-                    }
                     fflush(stdout);
                 }
             } else if (bytesRead == 0) {
@@ -128,12 +123,7 @@ int main(int argc, char* argv[]) {
             } else {
                 // Erreur de lecture
                 if (errno == EINTR) {
-                    if (should_exit) {
-                        // Le parent a demandé la terminaison
-                        break;
-                    } else {
-                        continue; // Continuer la lecture
-                    }
+                    continue; // Continuer la lecture
                 } else {
                     perror("Erreur lors de la lecture du pipe de réception");
                     break;
@@ -167,10 +157,6 @@ int main(int argc, char* argv[]) {
 
         char buffer[256]; // Buffer pour la lecture des messages de l'utilisateur
         while (true) {
-            if (isJoliMode) {
-                printf("%s, entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
-                fflush(stdout);
-            }
             if (!fgets(buffer, sizeof(buffer), stdin)) {
                 // Fin de stdin (Ctrl+D)
                 if (isManuelMode) {
@@ -180,26 +166,31 @@ int main(int argc, char* argv[]) {
                 kill(pid, SIGTERM);
                 break;
             }
+
             if (strcmp(buffer, "exit\n") == 0) {
                 // Commande 'exit' reçue, terminer le chat
                 // Envoyer SIGTERM au processus enfant pour qu'il se termine
                 kill(pid, SIGTERM);
                 break;
             }
+
             ssize_t bytes_written = write(fd_send, buffer, strlen(buffer) + 1);
             if (bytes_written == -1) {
                 perror("Erreur lors de l'écriture dans le pipe");
                 break;
             }
+            // Forcer le vidage du buffer d'écriture
+            fsync(fd_send);
+
             if (!isBotMode) {
                 // Affichage du message envoyé par l'utilisateur
                 printf(texte_a_print(pseudo_utilisateur).c_str(), pseudo_utilisateur.c_str(), buffer);
+                fflush(stdout);
             }
+
             if (isManuelMode) {
-                // Afficher les messages en attente si en mode manuel
-                output_shared_memory();
+                output_shared_memory(); // Afficher les messages en attente
             }
-            fflush(stdout);
         }
 
         close(fd_send); // Fermeture du pipe d'envoi
@@ -233,8 +224,7 @@ void handleSIGINT(int signal) {
             // Les pipes n'ont pas été ouverts, terminer avec le code de retour 4
             exit(4);
         } else if (isManuelMode) {
-            // Afficher les messages en attente en mode manuel
-            output_shared_memory();
+            output_shared_memory(); // Afficher les messages en attente
         } else {
             // Ignorer SIGINT lorsque les pipes sont ouverts et que --manuel n'est pas activé
         }
@@ -299,7 +289,6 @@ void checkParams(int argc, char* argv[]) {
     for (int i = 3; i < argc; ++i) {
         if (string(argv[i]) == "--bot") isBotMode = true;
         if (string(argv[i]) == "--manuel") isManuelMode = true;
-        if (string(argv[i]) == "--joli") isJoliMode = true; // Option supplémentaire pour un affichage amélioré
     }
 }
 
@@ -313,26 +302,9 @@ void createPipe(const string& pipePath) {
     }
 }
 
-// Réinitialise la ligne du terminal (utilisé en mode joli)
-void Reset_Ligne() {
-    cout << "\033[2K\r";
-}
-
 // Génère le format du texte à afficher en fonction des options
-string texte_a_print(string pseudo) {
+string texte_a_print(string) {
     string texte = "[\x1B[4m%s\x1B[0m] %s"; // Format par défaut avec pseudonyme souligné
-    if (isJoliMode) {
-        if (pseudo == pseudo_destinataire) {
-            // Couleur jaune pour le destinataire
-            texte = "\033[93m[\x1B[4m%s\x1B[24m]\033[0m %s";
-            Reset_Ligne();
-        } else if (pseudo == pseudo_utilisateur) {
-            // Couleur cyan pour l'utilisateur
-            texte = "\033[96m[\x1B[4m%s\x1B[24m]\033[0m %s";
-            printf("\033[A");
-            Reset_Ligne();
-        }
-    }
     return texte;
 }
 
