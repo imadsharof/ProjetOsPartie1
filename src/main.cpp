@@ -68,7 +68,6 @@ void handleSIGPIPE(int signal);
 
 
 int main(int argc, char* argv[]) {
-    bool isBotMode = false;
 
     checkParams(argc, argv);
 
