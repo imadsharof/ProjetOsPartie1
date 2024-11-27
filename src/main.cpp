@@ -9,16 +9,14 @@
 #include <sys/wait.h>
 #include <csignal>
 #include <sys/mman.h>
-#include <semaphore.h>
 
 using namespace std;
 
 // Constantes
 constexpr size_t SHM_SIZE = 4096;
 const char* SHM_NAME = "/chat_shm";
-const char* SEM_NAME = "/chat_semaphore";
 
-//Booléens
+// Booléens
 bool pipesOuverts = false;
 bool isManuelMode = false;
 bool isJoliMode = false;
@@ -32,49 +30,25 @@ string receivePipe;
 
 // Variables globales
 char* shm_ptr = nullptr;
-sem_t* semaphore = nullptr;
 size_t* shm_offset_ptr = nullptr;
 
 string pseudo_utilisateur;
 string pseudo_destinataire;
 
-//Prototypes
-// Initialise la mémoire partagée
+// Prototypes
 void initialize_shared_memory();
-
-// Libère la mémoire partagée à la fin du code
 void release_shared_memory();
-
-// Print ce qu'il y a dans la mémoire partagée et la réinitialise
 void output_shared_memory();
-
-// Ecrit dans la mémoire partagée
 void write_to_shared_memory(const string& message);
-
-// Vérifie si un caractère spécirique est dans la chaine de caractères
-bool containsChar(const string& str, char ch); 
-
-// Check les paramètres
+bool containsChar(const string& str, char ch);
 void checkParams(int argc, char* argv[]);
-
-// Crée les pipes
 void createPipe(const string& pipePath);
-
-// Supprime la ligne et remet le curseur au début de la ligne
 void Reset_Ligne();
-
-// Aide à définir la manière dont le pseudo est écrit en fonction du mode joli et du pseudo
 string texte_a_print(string pseudo);
-
-// S'occupe du signal SIGINT
 void handleSIGINT(int signal);
-
-// S'occupe du signal SIGPIPE
 void handleSIGPIPE(int signal);
 
-
 int main(int argc, char* argv[]) {
-
     checkParams(argc, argv);
 
     sendPipe = "/tmp/" + pseudo_utilisateur + "-" + pseudo_destinataire + ".chat";
@@ -87,15 +61,12 @@ int main(int argc, char* argv[]) {
         initialize_shared_memory();
     }
 
-    // Crée les processus
-    pid_t pid = fork(); 
+    pid_t pid = fork();
     if (pid < 0) {
         perror("Erreur lors de la création du processus");
         exit(1);
-    } 
-    else if (pid == 0) {
+    } else if (pid == 0) {
         signal(SIGINT, SIG_IGN);
-        // Processus fils, reçoit les messages
         int fd_receive = open(receivePipe.c_str(), O_RDONLY);
         if (fd_receive < 0) {
             perror("Erreur lors de l'ouverture du pipe de réception");
@@ -108,11 +79,10 @@ int main(int argc, char* argv[]) {
             if (bytesRead > 0) {
                 buffer[bytesRead] = '\0';
                 if (isManuelMode) {
-                    write_to_shared_memory(string(buffer)); 
-                } 
-                else {
+                    write_to_shared_memory(string(buffer));
+                } else {
                     printf(isBotMode ? "[%s] %s" : texte_a_print(pseudo_destinataire).c_str(), pseudo_destinataire.c_str(), buffer);
-                    if(isJoliMode){
+                    if (isJoliMode) {
                         printf("%s, entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
                     }
                 }
@@ -123,9 +93,7 @@ int main(int argc, char* argv[]) {
         }
         close(fd_receive);
         exit(0);
-    } 
-    else {
-        // Processus père, envoie les messages
+    } else {
         signal(SIGINT, handleSIGINT);
         signal(SIGPIPE, handleSIGPIPE);
 
@@ -137,7 +105,7 @@ int main(int argc, char* argv[]) {
         pipesOuverts = true;
         char buffer[256];
         while (true) {
-            if(isJoliMode) {
+            if (isJoliMode) {
                 printf("%s, entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
             }
             if (!fgets(buffer, sizeof(buffer), stdin)) {
@@ -149,7 +117,7 @@ int main(int argc, char* argv[]) {
             if (bytes_written == -1) {
                 perror("Erreur lors de l'écriture dans le pipe");
             }
-            if(!isBotMode){
+            if (!isBotMode) {
                 printf(texte_a_print(pseudo_utilisateur).c_str(), pseudo_utilisateur.c_str(), buffer);
             }
             if (isManuelMode) {
@@ -172,7 +140,6 @@ int main(int argc, char* argv[]) {
     return 0;
 }
 
-// Initialisation de la mémoire partagée
 void initialize_shared_memory() {
     int shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
     if (shm_fd == -1) {
@@ -198,67 +165,37 @@ void initialize_shared_memory() {
     shm_offset_ptr = reinterpret_cast<size_t*>(shm_ptr);
     *shm_offset_ptr = 0;
 
-    semaphore = sem_open(SEM_NAME, O_CREAT, 0666, 1);
-    if (semaphore == SEM_FAILED) {
-        perror("Erreur lors de l'ouverture du sémaphore");
-        munmap(shm_ptr, SHM_SIZE);
-        shm_unlink(SHM_NAME);
-        exit(1);
-    }
-
     close(shm_fd);
 }
 
-// Libération de la mémoire partagée
 void release_shared_memory() {
     if (shm_ptr) {
         munmap(shm_ptr, SHM_SIZE);
         shm_unlink(SHM_NAME);
     }
-    if (semaphore) {
-        sem_close(semaphore);
-        sem_unlink(SEM_NAME);
-    }
 }
 
-// Écriture dans la mémoire partagée
 void write_to_shared_memory(const string& message) {
-    sem_wait(semaphore);
-
     size_t message_length = message.size() + 1;
     if (*shm_offset_ptr + message_length > SHM_SIZE) {
         cerr << "Mémoire partagée pleine. Vidage..." << endl;
-        output_shared_memory();
-        printf(isBotMode ? "[%s] %s" : texte_a_print(pseudo_destinataire).c_str(), pseudo_destinataire.c_str(), message.c_str());
-        if(isJoliMode){
-            printf("%s, entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
-        }
         *shm_offset_ptr = 0;
     }
 
     char* shm_data = shm_ptr + sizeof(size_t) + *shm_offset_ptr;
     memcpy(shm_data, message.c_str(), message_length);
     *shm_offset_ptr += message_length;
-
-    sem_post(semaphore);
 }
 
-// Lecture depuis la mémoire partagée
 void output_shared_memory() {
-    sem_wait(semaphore);
-
     size_t offset = 0;
     char* shm_data = shm_ptr + sizeof(size_t);
     while (offset < *shm_offset_ptr) {
         printf(isBotMode ? "[%s] %s" : texte_a_print(pseudo_destinataire).c_str(), pseudo_destinataire.c_str(), (shm_data + offset));
         offset += strlen(shm_data + offset) + 1;
     }
-    if(isJoliMode){
-        printf("%s, entrez votre message (tapez 'exit' pour quitter) : ", pseudo_utilisateur.c_str());
-    }
-
-    memset(shm_ptr, 0, SHM_SIZE);
-    sem_post(semaphore);
+    memset(shm_ptr + sizeof(size_t), 0, SHM_SIZE - sizeof(size_t));
+    *shm_offset_ptr = 0;
 }
 
 bool containsChar(const string& str, char ch) {
@@ -312,24 +249,23 @@ void Reset_Ligne() {
     cout << "\033[2K\r";
 }
 
-string texte_a_print(string pseudo){
+string texte_a_print(string pseudo) {
     string texte = "[\x1B[4m%s\x1B[0m] %s";
-    if(isJoliMode){
-        if (pseudo == pseudo_destinataire){
-                texte = "\033[93m[\x1B[4m%s\x1B[24m]\033[0m %s";
-                Reset_Ligne();
-        }
-        else if(pseudo == pseudo_utilisateur){
-                texte = "\033[96m[\x1B[4m%s\x1B[24m]\033[0m %s";
-                printf("\033[A");
-                Reset_Ligne();
+    if (isJoliMode) {
+        if (pseudo == pseudo_destinataire) {
+            texte = "\033[93m[\x1B[4m%s\x1B[24m]\033[0m %s";
+            Reset_Ligne();
+        } else if (pseudo == pseudo_utilisateur) {
+            texte = "\033[96m[\x1B[4m%s\x1B[24m]\033[0m %s";
+            printf("\033[A");
+            Reset_Ligne();
         }
     }
     return texte;
 }
 
 void handleSIGINT(int signal) {
-    if(isJoliMode){
+    if (isJoliMode) {
         Reset_Ligne();
     }
     if (signal == SIGINT) {
@@ -342,7 +278,7 @@ void handleSIGINT(int signal) {
 
             unlink(sendPipe.c_str());
             unlink(receivePipe.c_str());
-            
+
             exit(4);
         }
     }
