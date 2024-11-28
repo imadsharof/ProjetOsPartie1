@@ -217,7 +217,7 @@ int main(int argc, char* argv[]) {
         while (true) {
             if (isJoliMode) {
                 // Afficher une phrase avant la saisie
-                printf("\n⭐✨ Veuillez entrer votre message ✨⭐ : ");
+                printf("\n⭐✨ Veuillez entrer votre message ✨⭐ : \n");
                 fflush(stdout);
             }
 
