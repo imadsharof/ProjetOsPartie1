@@ -11,6 +11,7 @@ extern std::string pseudo_utilisateur;
 extern std::string pseudo_destinataire;
 extern bool isBotMode;
 extern bool isManuelMode;
+extern bool isJoliMode;
 
 // Fonction utilisée
 extern bool containsChar(const std::string& str, char ch);
@@ -55,5 +56,6 @@ void ParameterValidator::checkParams(int argc, char* argv[]) {
     for (int i = 3; i < argc; ++i) {
         if (std::string(argv[i]) == "--bot") isBotMode = true;
         if (std::string(argv[i]) == "--manuel") isManuelMode = true;
+        if (std::string(argv[i]) == "--joli") isJoliMode = true;
     }
 }

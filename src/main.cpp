@@ -12,6 +12,7 @@
 #include <csignal>
 #include <sys/mman.h>
 #include <errno.h>
+#include <termios.h> // Pour --joli
 
 #include "SignalHandler.hpp"
 #include "SharedMemory.hpp"
@@ -24,6 +25,7 @@ using namespace std;
 bool pipesOuverts = false;       // Indique si les pipes ont été ouverts
 bool isManuelMode = false;       // Mode manuel activé ou non
 bool isBotMode = false;          // Mode bot activé ou non
+bool isJoliMode = false;         // Mode joli activé ou non
 
 int fd_receive = -1;             // Descripteur du pipe de réception
 int fd_send = -1;                // Descripteur du pipe d'envoi
@@ -41,9 +43,26 @@ volatile sig_atomic_t should_exit = 0; // Indique si le processus enfant doit se
 
 pid_t pid; // PID du processus enfant
 
+// Liste des codes de couleur ANSI
+const vector<string> color_codes = {
+    "\033[31m", // Rouge
+    "\033[32m", // Vert
+    "\033[33m", // Jaune
+    "\033[34m", // Bleu
+    "\033[35m", // Magenta (Violet)
+    "\033[36m", // Cyan (Turquoise)
+    "\033[91m", // Rouge clair
+    "\033[92m", // Vert clair
+    "\033[93m", // Jaune clair
+    "\033[94m", // Bleu clair
+    "\033[95m", // Magenta clair
+    "\033[96m", // Cyan clair
+};
+
 // Prototypes des fonctions restantes
 bool containsChar(const string& str, char ch);
 string texte_a_print(string pseudo);
+string getColorCode(const string& pseudo);
 ssize_t safeWrite(int fd, const void* buf, size_t count);
 ssize_t safeReadMessage(int fd, char* buffer, size_t max_size);
 
@@ -128,8 +147,8 @@ int main(int argc, char* argv[]) {
                         kill(getppid(), SIGUSR1);
                     }
                 } else {
-                    // Affichage immédiat du message en mode normal
-                    printf(isBotMode ? "[%s] %s" : texte_a_print(pseudo_destinataire).c_str(),
+                    // Affichage immédiat du message
+                    printf(texte_a_print(pseudo_destinataire).c_str(),
                            pseudo_destinataire.c_str(), buffer);
                     fflush(stdout);
                 }
@@ -165,6 +184,20 @@ int main(int argc, char* argv[]) {
         signal(SIGUSR1, SignalHandler::handleSIGUSR1); // Gestionnaire pour SIGUSR1
         signal(SIGUSR2, SignalHandler::handleSIGUSR2); // Gestionnaire pour SIGUSR2
 
+        // Configuration du terminal pour le mode joli
+        struct termios oldt, newt;
+        if (isJoliMode) {
+            // Obtenir les attributs du terminal
+            tcgetattr(STDIN_FILENO, &oldt);
+            newt = oldt;
+
+            // Désactiver l'écho des caractères de contrôle
+            newt.c_lflag &= ~ECHOCTL;
+
+            // Appliquer les nouveaux attributs
+            tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+        }
+
         // Ouverture du pipe d'envoi
         fd_send = open(sendPipe.c_str(), O_WRONLY);
         if (fd_send < 0) {
@@ -182,6 +215,12 @@ int main(int argc, char* argv[]) {
 
         char buffer[256]; // Buffer pour la lecture des messages de l'utilisateur
         while (true) {
+            if (isJoliMode) {
+                // Afficher une phrase avant la saisie
+                printf("\n⭐✨ Veuillez entrer votre message ✨⭐ : ");
+                fflush(stdout);
+            }
+
             if (!fgets(buffer, sizeof(buffer), stdin)) {
                 // Fin de stdin (Ctrl+D)
                 if (isManuelMode) {
@@ -201,10 +240,9 @@ int main(int argc, char* argv[]) {
 
             size_t message_length = strlen(buffer) + 1;
             if (safeWrite(fd_send, buffer, message_length) == -1) {
-                
+                // Erreur lors de l'écriture, déjà affichée dans safeWrite
                 break;
             }
-            
 
             if (!isBotMode) {
                 // Affichage du message envoyé par l'utilisateur
@@ -215,6 +253,11 @@ int main(int argc, char* argv[]) {
             if (isManuelMode) {
                 sharedMemory->output_shared_memory(); // Afficher les messages en attente
             }
+        }
+
+        // Rétablir les anciens attributs du terminal
+        if (isJoliMode) {
+            tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
         }
 
         close(fd_send); // Fermeture du pipe d'envoi
@@ -237,23 +280,35 @@ int main(int argc, char* argv[]) {
 
 // === Fonctions auxiliaires ===
 
-/**
- * @brief Vérifie si une chaîne contient un caractère spécifique
- * @param str La chaîne à vérifier
- * @param ch Le caractère à rechercher
- * @return true si le caractère est présent, false sinon
- */
 bool containsChar(const string& str, char ch) {
     return find(str.begin(), str.end(), ch) != str.end();
 }
 
-/**
- * @brief Génère le format du texte à afficher en fonction des options
- * @param pseudo Le pseudonyme (non utilisé ici)
- * @return Le format de texte approprié
- */
-string texte_a_print(string) {
-    string texte = "[\x1B[4m%s\x1B[0m] %s"; // Format par défaut avec pseudonyme souligné
+// Fonction pour obtenir le code couleur en fonction du pseudonyme
+string getColorCode(const string& pseudo) {
+    // Calculer un hachage simple du pseudonyme
+    size_t hash = 0;
+    for (char c : pseudo) {
+        hash = hash * 36 + c;
+    }
+    // Mapper le hachage sur le nombre de codes couleur disponibles
+    size_t color_index = hash % color_codes.size();
+    return color_codes[color_index];
+}
+
+string texte_a_print(string pseudo) {
+    string texte;
+    if (isBotMode) {
+        // En mode bot, pas de soulignement ni de couleur
+        texte = "[%s] %s";
+    } else if (isJoliMode) {
+        // En mode joli, ajout de couleurs pour les pseudonymes
+        string color_code = getColorCode(pseudo);
+        texte = "[" + color_code + "%s\033[0m] %s";
+    } else {
+        // Format par défaut avec pseudonyme souligné
+        texte = "[\x1B[4m%s\x1B[0m] %s";
+    }
     return texte;
 }
 
@@ -312,5 +367,3 @@ ssize_t safeReadMessage(int fd, char* buffer, size_t max_size) {
     buffer[total_read] = '\0'; // On termine la chaîne
     return total_read;
 }
-
-
