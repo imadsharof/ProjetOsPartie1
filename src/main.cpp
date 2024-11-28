@@ -1,3 +1,5 @@
+// main.cpp
+
 #include <iostream>
 #include <string>
 #include <vector>
@@ -11,10 +13,12 @@
 #include <sys/mman.h>
 #include <errno.h>
 
-using namespace std;
+#include "SignalHandler.hpp"
+#include "SharedMemory.hpp"
+#include "Pipes.hpp"
+#include "ParameterValidator.hpp"
 
-// Constantes
-constexpr size_t SHM_SIZE = 4096; // Taille de la mémoire partagée
+using namespace std;
 
 // Variables globales
 bool pipesOuverts = false;       // Indique si les pipes ont été ouverts
@@ -37,23 +41,20 @@ volatile sig_atomic_t should_exit = 0; // Indique si le processus enfant doit se
 
 pid_t pid; // PID du processus enfant
 
-// Prototypes des fonctions
-void initialize_shared_memory(bool create, const char* shm_name);
-void release_shared_memory(bool isParent, const char* shm_name);
-void output_shared_memory();
-void write_to_shared_memory(const string& message);
+// Prototypes des fonctions restantes
 bool containsChar(const string& str, char ch);
-void checkParams(int argc, char* argv[]);
-void createPipe(const string& pipePath);
 string texte_a_print(string pseudo);
-void handleSIGINT(int signal);
-void handleSIGPIPE(int signal);
-void handleSIGUSR1(int signal);
-void handleSIGTERM(int signal);
-void handleSIGUSR2(int signal );
+ssize_t safeWrite(int fd, const void* buf, size_t count);
+ssize_t safeReadMessage(int fd, char* buffer, size_t max_size);
 
 int main(int argc, char* argv[]) {
-    checkParams(argc, argv); // Vérifie les paramètres du programme
+    // Création des instances des classes
+    ParameterValidator paramValidator;
+    Pipes pipes("", "");
+    SharedMemory* sharedMemory = nullptr;
+
+    // Vérification des paramètres du programme
+    paramValidator.checkParams(argc, argv);
 
     // Construction des noms des pipes
     sendPipe = "/tmp/" + pseudo_utilisateur + "-" + pseudo_destinataire + ".chat";
@@ -62,19 +63,31 @@ int main(int argc, char* argv[]) {
     // Définition du nom de la mémoire partagée
     SHM_NAME = "/chat_shm_" + pseudo_utilisateur + "_" + pseudo_destinataire;
 
-    createPipe(sendPipe);      // Crée le pipe d'envoi si nécessaire
-    createPipe(receivePipe);   // Crée le pipe de réception si nécessaire
+    // Mise à jour des noms des pipes dans l'instance de Pipes
+    pipes = Pipes(pseudo_utilisateur, pseudo_destinataire);
+
+    // Création des pipes nommés
+    pipes.createPipe(sendPipe);
+    pipes.createPipe(receivePipe);
 
     // Initialisation de la mémoire partagée avant le fork
     if (isManuelMode) {
-        initialize_shared_memory(true, SHM_NAME.c_str()); // Crée la mémoire partagée
+        sharedMemory = new SharedMemory(SHM_NAME);
+        sharedMemory->initialize_shared_memory(true); // Crée la mémoire partagée
+        shm_ptr = sharedMemory->shm_ptr;
+        shm_offset_ptr = sharedMemory->shm_offset_ptr;
     }
+
+    // Initialiser SignalHandler avec les instances
+    SignalHandler::init(sharedMemory, &pipes);
 
     pid = fork(); // Création du processus enfant
     if (pid < 0) {
         perror("Erreur lors de la création du processus");
         if (isManuelMode) {
-            release_shared_memory(true, SHM_NAME.c_str());
+            sharedMemory->release_shared_memory(true);
+            delete sharedMemory;
+            sharedMemory = nullptr;
         }
         exit(1);
     } else if (pid == 0) {
@@ -82,12 +95,14 @@ int main(int argc, char* argv[]) {
 
         // Ouverture de la mémoire partagée existante en mode manuel
         if (isManuelMode) {
-            initialize_shared_memory(false, SHM_NAME.c_str());
+            sharedMemory->initialize_shared_memory(false);
+            shm_ptr = sharedMemory->shm_ptr;
+            shm_offset_ptr = sharedMemory->shm_offset_ptr;
         }
 
-        signal(SIGINT, SIG_IGN);          // Ignorer SIGINT dans le processus enfant
-        signal(SIGTERM, handleSIGTERM);   // Gestionnaire pour SIGTERM
-        signal(SIGUSR1, handleSIGUSR1);   // Gestionnaire pour SIGUSR1
+        signal(SIGINT, SIG_IGN); // Ignorer SIGINT dans le processus enfant
+        signal(SIGTERM, SignalHandler::handleSIGTERM); // Gestionnaire pour SIGTERM
+        signal(SIGUSR1, SignalHandler::handleSIGUSR1); // Gestionnaire pour SIGUSR1
 
         // Ouverture du pipe de réception
         fd_receive = open(receivePipe.c_str(), O_RDONLY);
@@ -99,16 +114,16 @@ int main(int argc, char* argv[]) {
 
         char buffer[256]; // Buffer pour la lecture des messages
         while (!should_exit) {
-            ssize_t bytesRead = read(fd_receive, buffer, sizeof(buffer) - 1);
+            ssize_t bytesRead = safeReadMessage(fd_receive, buffer, sizeof(buffer));
             if (bytesRead > 0) {
                 buffer[bytesRead] = '\0'; // Ajout du terminateur de chaîne
                 if (isManuelMode) {
-                    write_to_shared_memory(string(buffer)); // Écriture dans la mémoire partagée
+                    sharedMemory->write_to_shared_memory(string(buffer)); // Écriture dans la mémoire partagée
                     // Émettre un bip sonore pour notifier l'arrivée d'un message
                     printf("\a");
                     fflush(stdout);
                     // Vérifier si plus de 4096 octets sont en attente
-                    if (*shm_offset_ptr >= SHM_SIZE - sizeof(size_t)) {
+                    if (*shm_offset_ptr >= SharedMemory::SHM_SIZE - sizeof(size_t)) {
                         // Envoyer SIGUSR1 au processus parent pour afficher les messages
                         kill(getppid(), SIGUSR1);
                     }
@@ -120,12 +135,11 @@ int main(int argc, char* argv[]) {
                 }
             } else if (bytesRead == 0) {
                 // Pipe fermé, l'autre utilisateur a quitté
-				if (!isManuelMode) {
-				// Informer le processus parent en mode normal
-				kill(getppid(), SIGUSR2);
-				}
-				break;
-               
+                if (!isManuelMode) {
+                    // Informer le processus parent en mode normal
+                    kill(getppid(), SIGUSR2);
+                }
+                break;
             } else {
                 // Erreur de lecture
                 if (errno == EINTR) {
@@ -138,16 +152,18 @@ int main(int argc, char* argv[]) {
         }
         close(fd_receive); // Fermeture du pipe de réception
         if (isManuelMode) {
-            release_shared_memory(false, SHM_NAME.c_str()); // Libération de la mémoire partagée
+            sharedMemory->release_shared_memory(false); // Libération de la mémoire partagée
+            delete sharedMemory;
+            sharedMemory = nullptr;
         }
         exit(0);
     } else {
         // === Processus parent ===
 
-        signal(SIGINT, handleSIGINT);     // Gestionnaire pour SIGINT
-        signal(SIGPIPE, handleSIGPIPE);   // Gestionnaire pour SIGPIPE
-        signal(SIGUSR1, handleSIGUSR1);   // Gestionnaire pour SIGUSR1
-        signal(SIGUSR2, handleSIGUSR2);   // Ajout du gestionnaire SIGUSR2
+        signal(SIGINT, SignalHandler::handleSIGINT);   // Gestionnaire pour SIGINT
+        signal(SIGPIPE, SignalHandler::handleSIGPIPE); // Gestionnaire pour SIGPIPE
+        signal(SIGUSR1, SignalHandler::handleSIGUSR1); // Gestionnaire pour SIGUSR1
+        signal(SIGUSR2, SignalHandler::handleSIGUSR2); // Gestionnaire pour SIGUSR2
 
         // Ouverture du pipe d'envoi
         fd_send = open(sendPipe.c_str(), O_WRONLY);
@@ -156,7 +172,9 @@ int main(int argc, char* argv[]) {
             // Envoyer SIGTERM au processus enfant pour qu'il se termine
             kill(pid, SIGTERM);
             if (isManuelMode) {
-                release_shared_memory(true, SHM_NAME.c_str());
+                sharedMemory->release_shared_memory(true);
+                delete sharedMemory;
+                sharedMemory = nullptr;
             }
             exit(1);
         }
@@ -167,7 +185,7 @@ int main(int argc, char* argv[]) {
             if (!fgets(buffer, sizeof(buffer), stdin)) {
                 // Fin de stdin (Ctrl+D)
                 if (isManuelMode) {
-                    output_shared_memory(); // Afficher les messages en attente
+                    sharedMemory->output_shared_memory(); // Afficher les messages en attente
                 }
                 // Envoyer SIGTERM au processus enfant pour qu'il se termine
                 kill(pid, SIGTERM);
@@ -181,13 +199,12 @@ int main(int argc, char* argv[]) {
                 break;
             }
 
-            ssize_t bytes_written = write(fd_send, buffer, strlen(buffer) + 1);
-            if (bytes_written == -1) {
-                perror("Erreur lors de l'écriture dans le pipe");
+            size_t message_length = strlen(buffer) + 1;
+            if (safeWrite(fd_send, buffer, message_length) == -1) {
+                
                 break;
             }
-            // Forcer le vidage du buffer d'écriture
-            fsync(fd_send);
+            
 
             if (!isBotMode) {
                 // Affichage du message envoyé par l'utilisateur
@@ -196,7 +213,7 @@ int main(int argc, char* argv[]) {
             }
 
             if (isManuelMode) {
-                output_shared_memory(); // Afficher les messages en attente
+                sharedMemory->output_shared_memory(); // Afficher les messages en attente
             }
         }
 
@@ -206,229 +223,94 @@ int main(int argc, char* argv[]) {
         wait(nullptr);
 
         // Suppression des pipes nommés
-        unlink(sendPipe.c_str());
-        unlink(receivePipe.c_str());
+        pipes.unlink_pipes();
 
         if (isManuelMode) {
-            release_shared_memory(true, SHM_NAME.c_str()); // Libération de la mémoire partagée
+            sharedMemory->release_shared_memory(true); // Libération de la mémoire partagée
+            delete sharedMemory;
+            sharedMemory = nullptr;
         }
 
         return 0; // Fin du programme
     }
 }
 
-void handleSIGUSR2(int signal) {
-    if (signal == SIGUSR2) {
-        // L'autre utilisateur s'est déconnecté
-        if (!isManuelMode) {
-            // En mode normal, terminer le programme proprement
-            if (fd_send != -1) close(fd_send);
-            if (pid > 0) {
-                kill(pid, SIGTERM);
-                wait(nullptr);
-            }
-            unlink(sendPipe.c_str());
-            unlink(receivePipe.c_str());
-            if (isManuelMode) {
-                release_shared_memory(true, SHM_NAME.c_str());
-            }
-            exit(0);
-        } else {
-            // En mode manuel, ne pas terminer le programme
-            
-        }
-    }
-}
-
-
-// === Gestionnaires de signaux ===
-
-// Gestionnaire pour SIGTERM dans le processus enfant
-void handleSIGTERM(int /*signal*/) {
-    should_exit = 1; // Indique au processus enfant de se terminer
-}
-
-// Gestionnaire pour SIGINT dans le processus parent
-void handleSIGINT(int signal) {
-    if (signal == SIGINT) {
-        if (!pipesOuverts) {
-            // Les pipes n'ont pas été ouverts, terminer avec le code de retour 4
-            exit(4);
-        } else if (isManuelMode) {
-            output_shared_memory(); // Afficher les messages en attente
-        } else {
-            // Terminer le programme proprement avec un message
-            fprintf(stderr, "\n\033[33mWARNING\033[0m Utilisateur déconnecté.\n");
-            // Fermer les descripteurs de fichiers et envoyer un signal au processus enfant
-            if (fd_send != -1) close(fd_send);
-            kill(pid, SIGTERM); // Envoyer SIGTERM au processus enfant
-            // Attendre la fin du processus enfant
-            wait(nullptr);
-            // Suppression des pipes nommés
-            unlink(sendPipe.c_str());
-            unlink(receivePipe.c_str());
-            if (isManuelMode) {
-                release_shared_memory(true, SHM_NAME.c_str()); // Libération de la mémoire partagée
-            }
-            exit(0);
-        }
-    }
-}
-
-// Gestionnaire pour SIGPIPE dans le processus parent
-void handleSIGPIPE(int signal) {
-    if (signal == SIGPIPE && !isManuelMode) {
-        cout << "Connexion terminée par l'autre utilisateur." << endl;
-        exit(5);
-    }
-}
-
-// Gestionnaire pour SIGUSR1 dans le processus parent
-void handleSIGUSR1(int) {
-    if (isManuelMode) {
-        output_shared_memory(); // Afficher les messages en attente
-    }
-}
-
 // === Fonctions auxiliaires ===
 
-// Vérifie si une chaîne contient un caractère spécifique
+/**
+ * @brief Vérifie si une chaîne contient un caractère spécifique
+ * @param str La chaîne à vérifier
+ * @param ch Le caractère à rechercher
+ * @return true si le caractère est présent, false sinon
+ */
 bool containsChar(const string& str, char ch) {
     return find(str.begin(), str.end(), ch) != str.end();
 }
 
-// Vérifie les paramètres du programme
-void checkParams(int argc, char* argv[]) {
-    if (argc < 3) {
-        fprintf(stderr, "chat pseudo_utilisateur pseudo_destinataire [--bot] [--manuel]\n");
-        exit(1);
-    }
-
-    pseudo_utilisateur = argv[1];
-    pseudo_destinataire = argv[2];
-
-    // Vérification de la longueur des pseudonymes
-    if (pseudo_utilisateur.size() > 30 || pseudo_destinataire.size() > 30) {
-        fprintf(stderr, "Erreur : Les pseudonymes ne doivent pas dépasser 30 caractères.\n");
-        exit(2);
-    }
-
-    // Vérification des pseudonymes interdits
-    if (pseudo_utilisateur == "." || pseudo_utilisateur == ".." ||
-        pseudo_destinataire == "." || pseudo_destinataire == "..") {
-        fprintf(stderr, "Erreur : Les pseudonymes ne peuvent pas être '.' ou '..'.\n");
-        exit(3);
-    }
-
-    // Vérification des caractères interdits dans les pseudonymes
-    vector<char> caracteres_interdits = {'/', '[', ']', '-'};
-    for (char caractere : caracteres_interdits) {
-        if (containsChar(pseudo_utilisateur, caractere) || containsChar(pseudo_destinataire, caractere)) {
-            fprintf(stderr, "Erreur : Les pseudonymes contiennent des caractères interdits (/, -, [, ]).\n");
-            exit(3);
-        }
-    }
-
-    // Traitement des options
-    for (int i = 3; i < argc; ++i) {
-        if (string(argv[i]) == "--bot") isBotMode = true;
-        if (string(argv[i]) == "--manuel") isManuelMode = true;
-    }
-}
-
-// Crée un pipe nommé si celui-ci n'existe pas déjà
-void createPipe(const string& pipePath) {
-    if (access(pipePath.c_str(), F_OK) != 0) {
-        if (mkfifo(pipePath.c_str(), 0666) == -1) {
-            perror("Erreur lors de la création du pipe");
-            exit(1);
-        }
-    }
-}
-
-// Génère le format du texte à afficher en fonction des options
+/**
+ * @brief Génère le format du texte à afficher en fonction des options
+ * @param pseudo Le pseudonyme (non utilisé ici)
+ * @return Le format de texte approprié
+ */
 string texte_a_print(string) {
     string texte = "[\x1B[4m%s\x1B[0m] %s"; // Format par défaut avec pseudonyme souligné
     return texte;
 }
 
-// Initialise la mémoire partagée
-void initialize_shared_memory(bool create, const char* shm_name) {
-    int shm_fd;
-    if (create) {
-        shm_fd = shm_open(shm_name, O_CREAT | O_RDWR, 0666);
-    } else {
-        shm_fd = shm_open(shm_name, O_RDWR, 0666);
-    }
+ssize_t safeWrite(int fd, const void* buf, size_t count) {
+    size_t total_written = 0;
+    const char* buffer = static_cast<const char*>(buf);
 
-    if (shm_fd == -1) {
-        perror("Erreur lors de l'ouverture de la mémoire partagée");
-        exit(1);
+    while (total_written < count) {
+        ssize_t bytes_written = write(fd, buffer + total_written, count - total_written);
+        if (bytes_written == -1) {
+            if (errno == EINTR) {
+                continue; // Interruption par un signal, on réessaie
+            } else {
+                // Erreur critique
+                perror("Erreur lors de l'écriture dans le pipe");
+                return -1;
+            }
+        }
+        total_written += bytes_written;
     }
+    return total_written;
+}
 
-    if (create) {
-        // Définir la taille de la mémoire partagée
-        if (ftruncate(shm_fd, SHM_SIZE) == -1) {
-            perror("Erreur lors de la configuration de la taille de la mémoire partagée");
-            close(shm_fd);
-            shm_unlink(shm_name);
-            exit(1);
+ssize_t safeReadMessage(int fd, char* buffer, size_t max_size) {
+    size_t total_read = 0;
+    while (total_read < max_size - 1) { // On laisse de la place pour le '\0'
+        ssize_t bytes_read = read(fd, buffer + total_read, 1);
+        if (bytes_read == -1) {
+            if (errno == EINTR) {
+                continue; // Interruption par un signal, on réessaie
+            } else {
+                // Erreur critique
+                perror("Erreur lors de la lecture du pipe de réception");
+                return -1;
+            }
+        } else if (bytes_read == 0) {
+            // Fin du flux
+            if (total_read == 0) {
+                // Pas de données lues
+                return 0;
+            } else {
+                // Données partielles lues
+                buffer[total_read] = '\0'; // On termine la chaîne
+                return total_read;
+            }
+        } else {
+            // Un octet lu
+            if (buffer[total_read] == '\0') {
+                // Fin du message
+                return total_read + 1;
+            }
+            total_read += bytes_read;
         }
     }
-
-    // Mapping de la mémoire partagée
-    shm_ptr = static_cast<char*>(mmap(nullptr, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0));
-    if (shm_ptr == MAP_FAILED) {
-        perror("Erreur lors du mapping de la mémoire partagée");
-        close(shm_fd);
-        if (create) {
-            shm_unlink(shm_name);
-        }
-        exit(1);
-    }
-
-    shm_offset_ptr = reinterpret_cast<size_t*>(shm_ptr);
-    if (create) {
-        *shm_offset_ptr = 0; // Initialisation de l'offset
-    }
-
-    close(shm_fd); // Fermeture du descripteur de la mémoire partagée
+    // Si on arrive ici, le buffer est plein
+    buffer[total_read] = '\0'; // On termine la chaîne
+    return total_read;
 }
 
-// Libère la mémoire partagée
-void release_shared_memory(bool isParent, const char* shm_name) {
-    if (shm_ptr) {
-        munmap(shm_ptr, SHM_SIZE); // Détache le segment de mémoire partagée
-        if (isParent) {
-            shm_unlink(shm_name); // Supprime la mémoire partagée
-        }
-    }
-}
 
-// Écrit un message dans la mémoire partagée
-void write_to_shared_memory(const string& message) {
-    size_t message_length = message.size() + 1; // Taille du message avec le caractère nul
-    if (*shm_offset_ptr + message_length > SHM_SIZE - sizeof(size_t)) {
-        // Mémoire pleine, réinitialiser
-        *shm_offset_ptr = 0;
-    }
-
-    char* shm_data = shm_ptr + sizeof(size_t) + *shm_offset_ptr;
-    memcpy(shm_data, message.c_str(), message_length); // Copie du message dans la mémoire partagée
-    *shm_offset_ptr += message_length; // Mise à jour de l'offset
-}
-
-// Affiche les messages en attente depuis la mémoire partagée
-void output_shared_memory() {
-    size_t offset = 0;
-    char* shm_data = shm_ptr + sizeof(size_t);
-    while (offset < *shm_offset_ptr) {
-        // Affichage des messages
-        printf(isBotMode ? "[%s] %s" : texte_a_print(pseudo_destinataire).c_str(),
-               pseudo_destinataire.c_str(), (shm_data + offset));
-        offset += strlen(shm_data + offset) + 1;
-    }
-    // Réinitialisation de la mémoire partagée
-    memset(shm_ptr + sizeof(size_t), 0, SHM_SIZE - sizeof(size_t));
-    *shm_offset_ptr = 0;
-}

@@ -5,10 +5,10 @@ EXE := $(BINDIR)chat
 
 # Compilation avec g++
 CC      := g++
-CFLAGS  := -Wall -Wextra -O3 -std=c++20 -g
+CFLAGS  := -std=gnu++17 -Wall -Wextra -O2 -Wpedantic
 
 # Fichiers sources et objets
-SOURCES := $(SRCDIR)/main.cpp
+SOURCES := $(wildcard $(SRCDIR)/*.cpp)
 OBJECTS := $(SOURCES:.cpp=.o)
 
 # Cible par défaut
@@ -26,4 +26,5 @@ $(SRCDIR)/%.o: $(SRCDIR)/%.cpp
 # Nettoyage des fichiers objets et de l'exécutable
 clean:
 	@rm -f $(OBJECTS) $(EXE)
+
 
